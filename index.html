@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Twenty Pigeons</title>
+<style>
+body{font-family:sans-serif;background:#2b3a2b;color:#eee;margin:0;padding:10px;text-align:center}
+canvas{background:#6fa85a;border-radius:8px;max-width:100%;touch-action:manipulation;cursor:pointer}
+label,button{font-size:16px;margin:6px}
+#note{min-height:2.4em}
+#test,#health,#stress{font-size:14px;opacity:.9;min-height:1.4em}
+#sorter{max-width:420px;margin:24px auto;text-align:left}
+#sorter h2{text-align:center}
+#plist{list-style:none;padding:0;margin:0}
+#plist li{background:#3d523d;border:2px solid #6fa85a;border-radius:6px;margin:5px 0;padding:8px;display:flex;align-items:center;cursor:grab}
+#plist li.over{border-color:#fc3;background:#4d674d}
+#plist li.drag{opacity:.4}
+#plist li span{flex:1}
+#plist button{margin:0 2px;padding:2px 8px}
+#sstatus,#stest{text-align:center;font-size:14px;min-height:1.4em}
+#pcount{text-align:center;font-size:14px;font-weight:bold;padding:6px;border-radius:6px;margin-top:6px}
+#pcount.pass{background:#2e7d32}
+#pcount.fail{background:#c62828}
+</style></head><body>
+<h1>Twenty Pigeons</h1>
+<canvas id="c" width="600" height="400"></canvas>
+<div>
+<label>Neighbours watched: <b id="kv">3</b> <input id="k" type="range" min="1" max="10" value="3"></label>
+<button id="reset">Reset flock</button>
+<button id="stress-btn">Run 20-bird check</button>
+</div>
+<div id="note" aria-live="polite">Click a bird near the edge of the flock.</div>
+<div id="health"></div>
+<div id="stress" aria-live="polite"></div>
+<div id="test"></div>
+<div id="test2"></div>
+
+<div id="sorter">
+<h2>Pigeon Detective: panel sorter</h2>
+<p style="text-align:center;font-size:14px">Drag a panel onto another row, or use the arrows.</p>
+<ul id="plist"></ul>
+<div id="sstatus" aria-live="polite"></div>
+<div id="stest"></div>
+<div id="pcount" aria-live="polite"></div>
+</div>
+
+<script>
+const cv=document.getElementById('c'),g=cv.getContext('2d');
+const W=600,H=400,N=20;
+let birds=[],K=3,turned=new Set(),startAngle=0,lastKey='',tick=0;
+function meanAngle(list){
+ let sx=0,sy=0;
+ list.forEach(a=>{sx+=Math.cos(a);sy+=Math.sin(a)});
+ return Math.atan2(sy,sx);
+}
+// steering: new heading for bird i from itself plus its k nearest neighbours (wrapped world)
+function wrapD(a,b,L){let d=Math.abs(a-b);return Math.min(d,L-d)}
+function steer(arr,i,k){
+ const b=arr[i];
+ const ds=arr.map((o,j)=>({j,d:Math.hypot(wrapD(o.x,b.x,W),wrapD(o.y,b.y,H))})).filter(o=>o.j!==i).sort((p,q)=>p.d-q.d).slice(0,k);
+ return meanAngle([b.a].concat(ds.map(o=>arr[o.j].a)));
+}
+function selfTest(){
+ const deg=Math.PI/180;
+ let m=meanAngle([359*deg,1*deg])/deg;
+ m=((m%360)+360)%360;
+ const ok=Math.min(m,360-m)<0.0001;
+ document.getElementById('test').textContent=ok?
+  'Check 1 passed: 359 and 1 degrees average to 0.':
+  'Check 1 FAILED: 359 and 1 averaged to '+m.toFixed(2)+'.';
+ const t=[{x:100,y:100,a:350*deg},{x:110,y:100,a:10*deg},{x:100,y:110,a:10*deg},{x:500,y:300,a:180*deg}];
+ let s=steer(t,0,2)/deg;s=((s%360)+360)%360;
+ const exp=Math.atan2(Math.sin(350*deg)+2*Math.sin(10*deg),Math.cos(350*deg)+2*Math.cos(10*deg))/deg;
+ const ok2=Math.abs(s-((exp%360)+360)%360)<0.0001&&s>0&&s<10;
+ document.getElementById('test2').style.fontSize='14px';
+ document.getElementById('test2').textContent=ok2?
+  'Check 2 passed: steering uses only the 2 nearest birds ('+s.toFixed(2)+' degrees).':
+  'Check 2 FAILED: steering gave '+s.toFixed(2)+' degrees.';
+ return ok&&ok2;
+}
+selfTest();
+function init(){
+ birds=[];turned=new Set();
+ for(let i=0;i<N;i++)birds.push({x:230+Math.random()*140,y:160+Math.random()*80,a:0.3+(Math.random()-.5)*0.2,t:0});
+ say('Click a bird near the edge of the flock.');
+}
+function say(s){if(s!==lastKey){lastKey=s;document.getElementById('note').textContent=s}}
+function gap(a,b){let d=Math.abs(a-b)%(2*Math.PI);return d>Math.PI?2*Math.PI-d:d}
+function advance(arr,k){
+ const next=arr.map((b,i)=>b.startle>0?b.a:steer(arr,i,k));
+ arr.forEach((b,i)=>{
+  if(b.startle>0)b.startle--;else b.a=next[i];
+  b.x+=Math.cos(b.a)*1.2;b.y+=Math.sin(b.a)*1.2;
+  b.x=(b.x+W)%W;b.y=(b.y+H)%H;
+ });
+}
+function stats(arr){
+ let sx=0,sy=0;arr.forEach(b=>{sx+=Math.cos(b.a);sy+=Math.sin(b.a)});
+ const align=Math.hypot(sx,sy)/arr.length;
+ const r=arr[0];let cx=0,cy=0;
+ arr.forEach(b=>{let dx=b.x-r.x,dy=b.y-r.y;if(dx>W/2)dx-=W;if(dx<-W/2)dx+=W;if(dy>H/2)dy-=H;if(dy<-H/2)dy+=H;cx+=dx;cy+=dy});
+ cx/=arr.length;cy/=arr.length;
+ let sp=0;
+ arr.forEach(b=>{let dx=b.x-r.x,dy=b.y-r.y;if(dx>W/2)dx-=W;if(dx<-W/2)dx+=W;if(dy>H/2)dy-=H;if(dy<-H/2)dy+=H;sp+=Math.hypot(dx-cx,dy-cy)});
+ return {align,spread:sp/arr.length};
+}
+function step(){
+ advance(birds,K);
+ birds.forEach((b,i)=>{
+  if(turned.size&&gap(b.a,startAngle)>0.5&&!turned.has(i)&&gap(b.a,0.3)>0.5)turned.add(i);
+ });
+ if(turned.size){const n=turned.size;
+  say(n>=N-1?'The whole flock turned: a wave.':n<3?'Only '+n+' bird(s) turned so far.':n+' of '+N+' birds have turned.');}
+ if(++tick%15==0){const s=stats(birds);
+  document.getElementById('health').textContent='Alignment '+s.align.toFixed(2)+' (1 = all same way), spread '+Math.round(s.spread)+' px';}
+}
+function draw(){
+ g.clearRect(0,0,W,H);
+ birds.forEach((b,i)=>{
+  g.save();g.translate(b.x,b.y);g.rotate(b.a);
+  g.fillStyle=turned.has(i)?'#f4a':'#889';
+  g.beginPath();g.ellipse(0,0,10,6,0,0,7);g.fill();
+  g.fillStyle='#445';g.beginPath();g.arc(9,0,4,0,7);g.fill();
+  g.fillStyle='#fc3';g.fillRect(12,-1,4,2);
+  g.strokeStyle='#fff';g.lineWidth=1.5;
+  g.beginPath();g.moveTo(16,0);g.lineTo(26,0);g.stroke();
+  g.restore();
+ });
+}
+function seeded(n){let x=Math.sin(n*127.1)*43758.5453;return x-Math.floor(x)}
+document.getElementById('stress-btn').onclick=()=>{
+ const out=[];
+ for(let k=1;k<=10;k+=3){
+  const arr=[];
+  for(let i=0;i<N;i++)arr.push({x:230+seeded(i*3+1)*140,y:160+seeded(i*3+2)*80,a:seeded(i*3+3)*6.283,startle:0});
+  for(let t=0;t<1500;t++)advance(arr,k);
+  const s=stats(arr);
+  out.push('k='+k+': align '+s.align.toFixed(2)+', spread '+Math.round(s.spread));
+ }
+ document.getElementById('stress').textContent='20 birds, random headings, 1500 steps: '+out.join(' | ');
+};
+cv.addEventListener('click',e=>{
+ const r=cv.getBoundingClientRect(),x=(e.clientX-r.left)*W/r.width,y=(e.clientY-r.top)*H/r.height;
+ let bi=0,bd=1e9;birds.forEach((b,i)=>{const d=Math.hypot(b.x-x,b.y-y);if(d<bd){bd=d;bi=i}});
+ const b=birds[bi];startAngle=b.a;
+ b.a+=Math.PI*0.75;b.startle=25;
+ turned=new Set([bi]);
+});
+document.getElementById('k').oninput=e=>{K=+e.target.value;document.getElementById('kv').textContent=K};
+document.getElementById('reset').onclick=init;
+init();
+setInterval(()=>{step();draw()},33);
+
+// ---------- panel sorter ----------
+// one move function: takes the item at 'from' out and puts it at 'to'. Returns a new array.
+function moveItem(arr,from,to){
+ if(from<0||from>=arr.length||to<0||to>=arr.length||from===to)return arr.slice();
+ const out=arr.slice();
+ const x=out.splice(from,1)[0];
+ out.splice(to,0,x);
+ return out;
+}
+function sorterTest(){
+ const a=moveItem([1,2,3],0,2).join(',')==='2,3,1';
+ const b=moveItem([1,2,3],2,0).join(',')==='3,1,2';
+ const c=moveItem([1,2,3],1,1).join(',')==='1,2,3';
+ const d=moveItem([1,2,3],0,5).join(',')==='1,2,3';
+ const e=moveItem([4,5,6],1,0).slice().sort().join(',')==='4,5,6';
+ const ok=a&&b&&c&&d&&e;
+ document.getElementById('stest').textContent=ok?'Sorter check passed: moves work and nothing gets lost.':'Sorter check FAILED ('+[a,b,c,d,e].join(' ')+').';
+ return ok;
+}
+// panel-count self-test: the live list must hold exactly 6 unique panels, numbered 1 to 6
+function panelCountTest(){
+ const box=document.getElementById('pcount');
+ const lenOk=panels.length===6;
+ const uniqOk=new Set(panels).size===panels.length;
+ const rangeOk=panels.every(p=>Number.isInteger(p)&&p>=1&&p<=6);
+ const ok=lenOk&&uniqOk&&rangeOk;
+ box.className=ok?'pass':'fail';
+ box.textContent=ok?'PASS: 6 panels, no duplicates, none missing.':
+  'FAIL: '+panels.length+' panels'+(uniqOk?'':', duplicates found')+(rangeOk?'':', a panel number is out of range')+'.';
+ return ok;
+}
+let panels=[3,1,4,2,6,5],dragFrom=-1;
+function setPanels(next){
+ panels=next;renderPanels();
+}
+function renderPanels(){
+ const ul=document.getElementById('plist');ul.innerHTML='';
+ panels.forEach((p,i)=>{
+  const li=document.createElement('li');
+  li.draggable=true;
+  li.innerHTML='<span>Panel '+p+'</span>';
+  const up=document.createElement('button');up.textContent='\u2191';up.setAttribute('aria-label','Move panel '+p+' up');
+  up.onclick=()=>setPanels(moveItem(panels,i,i-1));
+  const dn=document.createElement('button');dn.textContent='\u2193';dn.setAttribute('aria-label','Move panel '+p+' down');
+  dn.onclick=()=>setPanels(moveItem(panels,i,i+1));
+  li.appendChild(up);li.appendChild(dn);
+  li.addEventListener('dragstart',e=>{dragFrom=i;li.classList.add('drag');
+   try{e.dataTransfer.effectAllowed='move';e.dataTransfer.setData('text/plain',String(i))}catch(x){}});
+  li.addEventListener('dragend',()=>{dragFrom=-1;li.classList.remove('drag');
+   ul.querySelectorAll('.over').forEach(n=>n.classList.remove('over'))});
+  li.addEventListener('dragover',e=>{e.preventDefault();li.classList.add('over')});
+  li.addEventListener('dragleave',()=>li.classList.remove('over'));
+  li.addEventListener('drop',e=>{e.preventDefault();
+   if(dragFrom>=0)setPanels(moveItem(panels,dragFrom,i));
+   dragFrom=-1});
+  ul.appendChild(li);
+ });
+ const inOrder=panels.every((p,i)=>p===i+1);
+ const uniq=new Set(panels).size===panels.length&&panels.length===6;
+ document.getElementById('sstatus').textContent='Order: '+panels.join(', ')+(uniq?'':' (LIST BROKEN)')+(inOrder?' - in reading order.':' - not in order yet.');
+ panelCountTest();
+}
+try{sorterTest();renderPanels()}catch(err){document.getElementById('stest').textContent='Sorter error: '+err.message}
+</script></body></html>
